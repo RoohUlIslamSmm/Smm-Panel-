@@ -1,0 +1,6 @@
+node_modules/
+backend.log
+*.db
+*.db-shm
+*.db-wal
+.env

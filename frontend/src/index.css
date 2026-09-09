@@ -1,0 +1,426 @@
+:root {
+  --text: #6b6375;
+  --text-h: #08060d;
+  --bg: #fff;
+  --border: #e5e4e7;
+  --code-bg: #f4f3ec;
+  --accent: #aa3bff;
+  --accent-bg: rgba(170, 59, 255, 0.1);
+  --accent-border: rgba(170, 59, 255, 0.5);
+  --social-bg: rgba(244, 243, 236, 0.5);
+  --shadow:
+    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+
+  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, Consolas, monospace;
+
+  font: 18px/145% var(--sans);
+  letter-spacing: 0.18px;
+  color-scheme: light dark;
+  color: var(--text);
+  background: var(--bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  @media (max-width: 1024px) {
+    font-size: 16px;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #9ca3af;
+    --text-h: #f3f4f6;
+    --bg: #16171d;
+    --border: #2e303a;
+    --code-bg: #1f2028;
+    --accent: #c084fc;
+    --accent-bg: rgba(192, 132, 252, 0.15);
+    --accent-border: rgba(192, 132, 252, 0.5);
+    --social-bg: rgba(47, 48, 58, 0.5);
+    --shadow:
+      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
+  }
+
+  #social .button-icon {
+    filter: invert(1) brightness(2);
+  }
+}
+
+body {
+  margin: 0;
+}
+
+#root {
+  width: 1126px;
+  max-width: 100%;
+  margin: 0 auto;
+  text-align: center;
+  border-inline: 1px solid var(--border);
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+h1,
+h2 {
+  font-family: var(--heading);
+  font-weight: 500;
+  color: var(--text-h);
+}
+
+h1 {
+  font-size: 56px;
+  letter-spacing: -1.68px;
+  margin: 32px 0;
+  @media (max-width: 1024px) {
+    font-size: 36px;
+    margin: 20px 0;
+  }
+}
+h2 {
+  font-size: 24px;
+  line-height: 118%;
+  letter-spacing: -0.24px;
+  margin: 0 0 8px;
+  @media (max-width: 1024px) {
+    font-size: 20px;
+  }
+}
+p {
+  margin: 0;
+}
+
+code,
+.counter {
+  font-family: var(--mono);
+  display: inline-flex;
+  border-radius: 4px;
+  color: var(--text-h);
+}
+
+code {
+  font-size: 15px;
+  line-height: 135%;
+  padding: 4px 8px;
+  background: var(--code-bg);
+}
+
+/* Professional Balance Payment Cards */
+.payment-methods {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 18px;
+  margin-top: 20px;
+}
+
+.payment-card {
+  padding: 20px;
+  border: 1px solid #ddd;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.payment-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 7px 18px rgba(0, 0, 0, 0.12);
+}
+
+.payment-card h3 {
+  margin-top: 0;
+  margin-bottom: 14px;
+  font-size: 19px;
+}
+
+.payment-card p {
+  margin: 8px 0;
+  line-height: 1.5;
+}
+
+.payment-card strong {
+  font-weight: 600;
+}
+
+/* Professional Admin Dashboard */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 18px;
+  margin-bottom: 25px;
+}
+
+.card {
+  padding: 20px;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.07);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 7px 18px rgba(0, 0, 0, 0.11);
+}
+
+.card h3 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
+.card strong {
+  font-size: 24px;
+}
+
+/* ===== ADMIN PANEL POLISH ===== */
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 720px;
+}
+
+.admin-table th {
+  padding: 12px 10px;
+  text-align: left;
+  background: #f5f7fb;
+  font-size: 13px;
+  font-weight: 700;
+  color: #374151;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.admin-table td {
+  padding: 12px 10px;
+  border-bottom: 1px solid #eef0f4;
+  font-size: 13px;
+  color: #374151;
+  vertical-align: middle;
+}
+
+.admin-table tr:hover td {
+  background: #fafbfc;
+}
+
+.deposit-table {
+  min-width: 650px;
+}
+
+.admin-table select {
+  padding: 7px 9px;
+  border: 1px solid #d9dee7;
+  border-radius: 7px;
+  background: white;
+  font-size: 12px;
+}
+
+.admin-table button {
+  border: 0;
+  border-radius: 7px;
+  padding: 7px 10px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+@media (max-width: 700px) {
+  .admin-table {
+    min-width: 680px;
+  }
+
+  .admin-table th,
+  .admin-table td {
+    padding: 9px 8px;
+    font-size: 12px;
+  }
+}
+
+/* ===== PROFESSIONAL ADMIN STATS ===== */
+
+.admin-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin: 20px 0;
+}
+
+.admin-stats .card {
+  position: relative;
+  padding: 20px;
+  border-radius: 14px;
+  background: white;
+  border: 1px solid #e8ebf0;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.05);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.admin-stats .card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 7px 20px rgba(0,0,0,0.08);
+}
+
+.admin-stats .card h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: #6b7280;
+  font-weight: 600;
+}
+
+.admin-stats .card strong {
+  display: block;
+  font-size: 28px;
+  font-weight: 800;
+  color: #111827;
+}
+
+@media (max-width: 700px) {
+  .admin-stats {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .admin-stats .card {
+    padding: 16px;
+  }
+
+  .admin-stats .card strong {
+    font-size: 24px;
+  }
+}
+
+/* ===== ADMIN STATUS CONTROLS ===== */
+
+.admin-table select,
+table select {
+  min-width: 125px;
+  padding: 8px 30px 8px 10px;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  background: #fff;
+  color: #374151;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.admin-table button,
+table button {
+  padding: 7px 11px;
+  border: 0;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.admin-table button:hover,
+table button:hover {
+  opacity: 0.85;
+}
+
+/* Deposit action buttons */
+table button:first-child {
+  background: #e8f7ee;
+  color: #16803c;
+}
+
+table button:last-child {
+  background: #fdecec;
+  color: #c62828;
+}
+
+/* Status text */
+.deposit-status-approved {
+  color: #16803c;
+  font-weight: 700;
+}
+
+.deposit-status-pending {
+  color: #b77900;
+  font-weight: 700;
+}
+
+.deposit-status-rejected {
+  color: #c62828;
+  font-weight: 700;
+}
+
+@media (max-width: 700px) {
+  table select {
+    min-width: 115px;
+  }
+
+  table button {
+    padding: 6px 9px;
+  }
+}
+
+/* ===== ADMIN STATUS CONTROLS ===== */
+
+.admin-table select,
+table select {
+  min-width: 125px;
+  padding: 8px 30px 8px 10px;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  background: #fff;
+  color: #374151;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.admin-table button,
+table button {
+  padding: 7px 11px;
+  border: 0;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.admin-table button:hover,
+table button:hover {
+  opacity: 0.85;
+}
+
+/* Deposit action buttons */
+table button:first-child {
+  background: #e8f7ee;
+  color: #16803c;
+}
+
+table button:last-child {
+  background: #fdecec;
+  color: #c62828;
+}
+
+/* Status text */
+.deposit-status-approved {
+  color: #16803c;
+  font-weight: 700;
+}
+
+.deposit-status-pending {
+  color: #b77900;
+  font-weight: 700;
+}
+
+.deposit-status-rejected {
+  color: #c62828;
+  font-weight: 700;
+}
+
+@media (max-width: 700px) {
+  table select {
+    min-width: 115px;
+  }
+
+  table button {
+    padding: 6px 9px;
+  }
+}
