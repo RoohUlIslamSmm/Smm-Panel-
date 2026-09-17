@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import "./App.css";
 
-const API = "http://127.0.0.1:3000";
+const API = "https://smm-panel-production-5076.up.railway.app";
 
 function App() {
   const [loggedIn, setLoggedIn] = useState(false);
