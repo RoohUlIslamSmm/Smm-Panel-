@@ -61,7 +61,17 @@ db.exec(`
         balance REAL NOT NULL
     )
 `);
-
+// Withdrawals table
+db.exec(`
+    CREATE TABLE IF NOT EXISTS withdrawals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        amount REAL NOT NULL,
+        method TEXT NOT NULL,
+        account TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'Pending',
+        createdAt TEXT NOT NULL
+    )
+`);
 
 // Deposits table
 db.exec(`
@@ -537,7 +547,181 @@ app.post("/api/orders", (req, res) => {
         order
     });
 });
+// ==================== PROFIT WITHDRAWAL SYSTEM ====================
 
+// Get profit summary
+app.get("/api/admin/profit", (req, res) => {
+    const result = db.prepare(`
+        SELECT
+            COALESCE(SUM(profit), 0) AS totalProfit
+        FROM orders
+    `).get();
+
+    const withdrawn = db.prepare(`
+        SELECT
+            COALESCE(SUM(amount), 0) AS withdrawnProfit
+        FROM withdrawals
+        WHERE status = 'Approved'
+    `).get();
+
+    const totalProfit = Number(result.totalProfit || 0);
+    const withdrawnProfit = Number(withdrawn.withdrawnProfit || 0);
+    const availableProfit = Math.max(0, totalProfit - withdrawnProfit);
+
+    res.json({
+        totalProfit,
+        withdrawnProfit,
+        availableProfit
+    });
+});
+
+
+// Create withdrawal request
+app.post("/api/admin/withdrawals", (req, res) => {
+    const { amount, method, account } = req.body;
+
+    const withdrawalAmount = Number(amount);
+
+    if (!withdrawalAmount || withdrawalAmount <= 0) {
+        return res.status(400).json({
+            success: false,
+            message: "Invalid withdrawal amount"
+        });
+    }
+
+    if (!method || !account) {
+        return res.status(400).json({
+            success: false,
+            message: "Withdrawal method and account are required"
+        });
+    }
+
+    const profitData = db.prepare(`
+        SELECT COALESCE(SUM(profit), 0) AS totalProfit
+        FROM orders
+    `).get();
+
+    const withdrawnData = db.prepare(`
+        SELECT COALESCE(SUM(amount), 0) AS withdrawnProfit
+        FROM withdrawals
+        WHERE status = 'Approved'
+    `).get();
+
+    const availableProfit =
+        Number(profitData.totalProfit || 0) -
+        Number(withdrawnData.withdrawnProfit || 0);
+
+    if (withdrawalAmount > availableProfit) {
+        return res.status(400).json({
+            success: false,
+            message: "Insufficient available profit",
+            availableProfit
+        });
+    }
+
+    const createdAt = new Date().toISOString();
+
+    const result = db.prepare(`
+        INSERT INTO withdrawals
+        (amount, method, account, status, createdAt)
+        VALUES (?, ?, ?, 'Pending', ?)
+    `).run(
+        withdrawalAmount,
+        method,
+        account,
+        createdAt
+    );
+
+    res.json({
+        success: true,
+        message: "Withdrawal request created",
+        withdrawalId: Number(result.lastInsertRowid),
+        amount: withdrawalAmount,
+        status: "Pending"
+    });
+});
+
+
+// Get withdrawal history
+app.get("/api/admin/withdrawals", (req, res) => {
+    const withdrawals = db.prepare(`
+        SELECT *
+        FROM withdrawals
+        ORDER BY id DESC
+    `).all();
+
+    res.json(withdrawals);
+});
+
+
+// Approve or reject withdrawal
+app.patch("/api/admin/withdrawals/:id/status", (req, res) => {
+    const id = Number(req.params.id);
+    const { status } = req.body;
+
+    if (!["Approved", "Rejected", "Pending"].includes(status)) {
+        return res.status(400).json({
+            success: false,
+            message: "Invalid status"
+        });
+    }
+
+    const withdrawal = db.prepare(`
+        SELECT *
+        FROM withdrawals
+        WHERE id = ?
+    `).get(id);
+
+    if (!withdrawal) {
+        return res.status(404).json({
+            success: false,
+            message: "Withdrawal not found"
+        });
+    }
+
+    if (withdrawal.status === "Approved" && status !== "Approved") {
+        return res.status(400).json({
+            success: false,
+            message: "Approved withdrawal cannot be changed"
+        });
+    }
+
+    if (status === "Approved" && withdrawal.status !== "Approved") {
+        const profitData = db.prepare(`
+            SELECT COALESCE(SUM(profit), 0) AS totalProfit
+            FROM orders
+        `).get();
+
+        const withdrawnData = db.prepare(`
+            SELECT COALESCE(SUM(amount), 0) AS withdrawnProfit
+            FROM withdrawals
+            WHERE status = 'Approved'
+        `).get();
+
+        const availableProfit =
+            Number(profitData.totalProfit || 0) -
+            Number(withdrawnData.withdrawnProfit || 0);
+
+        if (Number(withdrawal.amount) > availableProfit) {
+            return res.status(400).json({
+                success: false,
+                message: "Insufficient available profit",
+                availableProfit
+            });
+        }
+    }
+
+    db.prepare(`
+        UPDATE withdrawals
+        SET status = ?
+        WHERE id = ?
+    `).run(status, id);
+
+    res.json({
+        success: true,
+        message: `Withdrawal ${status.toLowerCase()}`
+    });
+});
 app.listen(PORT, "0.0.0.0", () => {
     console.log("SMM PANEL BACKEND STARTED");
     console.log(`PORT: ${PORT}`);
