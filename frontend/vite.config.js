@@ -6,4 +6,4 @@ export default defineConfig({
   preview: {
     allowedHosts: ['merry-miracle-production-116c.up.railway.app'],
   },
-})e
+})
