@@ -44,7 +44,16 @@ db.exec(`
         createdAt TEXT NOT NULL
     )
 `);
+// Add cost and profit columns safely for existing databases
+const orderColumns = db.prepare("PRAGMA table_info(orders)").all();
 
+if (!orderColumns.some((column) => column.name === "cost")) {
+    db.exec("ALTER TABLE orders ADD COLUMN cost REAL NOT NULL DEFAULT 0");
+}
+
+if (!orderColumns.some((column) => column.name === "profit")) {
+    db.exec("ALTER TABLE orders ADD COLUMN profit REAL NOT NULL DEFAULT 0");
+}
 // Balance table
 db.exec(`
     CREATE TABLE IF NOT EXISTS account (
