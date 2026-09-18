@@ -440,8 +440,8 @@ function App() {
               <div className="payment-methods">
                 <div className="payment-card">
                   <h3>💚 Easypaisa</h3>
-                  <p><strong>Account Name:</strong> SMM Panel</p>
-                  <p><strong>Account Number:</strong> 03XX-XXXXXXX</p>
+                  <p><strong>Account Name:</strong> NAWABZADA ROOH UL ISLAM</p>
+                  <p><strong>Account Number:</strong> +923119230060</p>
                   
                 </div>
 
