@@ -16,6 +16,15 @@ function App() {
   const [depositAmount, setDepositAmount] = useState("");
   const [depositMethod, setDepositMethod] = useState("Easypaisa");
   const [transactionId, setTransactionId] = useState("");
+  const [profitSummary, setProfitSummary] = useState({
+    totalProfit: 0,
+    withdrawnProfit: 0,
+    availableProfit: 0,
+  });
+  const [withdrawals, setWithdrawals] = useState([]);
+  const [withdrawAmount, setWithdrawAmount] = useState("");
+  const [withdrawMethod, setWithdrawMethod] = useState("Easypaisa");
+  const [withdrawAccount, setWithdrawAccount] = useState("");
 
   useEffect(() => {
     fetch(`${API}/api/services`)
@@ -45,6 +54,16 @@ function App() {
         .then((res) => res.json())
         .then((data) => setDeposits(data))
         .catch((err) => console.log("Admin deposits error:", err));
+
+      fetch(`${API}/api/admin/profit`)
+        .then((res) => res.json())
+        .then((data) => setProfitSummary(data))
+        .catch((err) => console.log("Profit summary error:", err));
+
+      fetch(`${API}/api/admin/withdrawals`)
+        .then((res) => res.json())
+        .then((data) => setWithdrawals(data))
+        .catch((err) => console.log("Withdrawals error:", err));
     }
   }, [active]);
 
@@ -165,6 +184,90 @@ function App() {
     }
   };
 
+  const refreshWithdrawals = () => {
+    fetch(`${API}/api/admin/profit`)
+      .then((res) => res.json())
+      .then((data) => setProfitSummary(data))
+      .catch((err) => console.log("Profit summary error:", err));
+
+    fetch(`${API}/api/admin/withdrawals`)
+      .then((res) => res.json())
+      .then((data) => setWithdrawals(data))
+      .catch((err) => console.log("Withdrawals error:", err));
+  };
+
+  const submitWithdrawal = async () => {
+    const amount = Number(withdrawAmount);
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      alert("Please enter a valid withdrawal amount");
+      return;
+    }
+
+    if (amount > Number(profitSummary.availableProfit || 0)) {
+      alert(`Maximum available profit is ₨${Number(profitSummary.availableProfit || 0).toFixed(2)}`);
+      return;
+    }
+
+    if (!withdrawAccount.trim()) {
+      alert("Please enter your account number / wallet");
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API}/api/admin/withdrawals`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount,
+          method: withdrawMethod,
+          account: withdrawAccount.trim(),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        alert(data.message || "Withdrawal request failed");
+        return;
+      }
+
+      alert(`Withdrawal request #${data.withdrawalId} submitted successfully`);
+      setWithdrawAmount("");
+      setWithdrawAccount("");
+      refreshWithdrawals();
+    } catch (error) {
+      console.log("Withdrawal error:", error);
+      alert("Backend connection failed");
+    }
+  };
+
+  const updateWithdrawalStatus = async (withdrawalId, status) => {
+    try {
+      const response = await fetch(
+        `${API}/api/admin/withdrawals/${withdrawalId}/status`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        alert(data.message || "Withdrawal update failed");
+        return;
+      }
+
+      refreshWithdrawals();
+      alert(`Withdrawal ${status.toLowerCase()} successfully`);
+    } catch (error) {
+      console.log("Withdrawal status error:", error);
+      alert("Backend connection failed");
+    }
+  };
+
   const refreshAdminOrders = () => {
     fetch(`${API}/api/admin/orders`)
       .then((res) => res.json())
@@ -175,6 +278,8 @@ function App() {
       .then((res) => res.json())
       .then((data) => setDeposits(data))
       .catch((err) => console.log("Admin deposits error:", err));
+
+    refreshWithdrawals();
   };
 
   const [authMode, setAuthMode] = useState("login");
@@ -873,6 +978,114 @@ function App() {
                 </table>
               </div>
             )}
+          </div>
+
+          <div className="panel" style={{ marginTop: "25px" }}>
+            <h2>💎 Profit & Withdrawals</h2>
+            <p>Withdraw your available order profit and manage withdrawal requests.</p>
+
+            <div className="cards admin-stats">
+              <div className="card">
+                <h3>💎 Total Profit</h3>
+                <strong>₨{Number(profitSummary.totalProfit).toFixed(2)}</strong>
+              </div>
+              <div className="card">
+                <h3>💸 Withdrawn</h3>
+                <strong>₨{Number(profitSummary.withdrawnProfit).toFixed(2)}</strong>
+              </div>
+              <div className="card">
+                <h3>💰 Available Profit</h3>
+                <strong>₨{Number(profitSummary.availableProfit).toFixed(2)}</strong>
+              </div>
+            </div>
+
+            <div style={{ marginTop: "20px" }}>
+              <label>Withdrawal Method</label>
+              <select
+                value={withdrawMethod}
+                onChange={(e) => setWithdrawMethod(e.target.value)}
+                style={{ display: "block", width: "100%", marginTop: "8px", marginBottom: "15px", padding: "10px" }}
+              >
+                <option value="Easypaisa">Easypaisa</option>
+                <option value="JazzCash">JazzCash</option>
+                <option value="Bank Account">Bank Account</option>
+              </select>
+
+              <label>Account / Wallet Number</label>
+              <input
+                type="text"
+                placeholder="Enter account or wallet number"
+                value={withdrawAccount}
+                onChange={(e) => setWithdrawAccount(e.target.value)}
+                style={{ display: "block", width: "100%", marginTop: "8px", marginBottom: "15px", padding: "10px", boxSizing: "border-box" }}
+              />
+
+              <label>Amount (₨)</label>
+              <input
+                type="number"
+                min="0.01"
+                step="0.01"
+                max={Number(profitSummary.availableProfit || 0)}
+                placeholder="Enter profit amount"
+                value={withdrawAmount}
+                onChange={(e) => setWithdrawAmount(e.target.value)}
+                style={{ display: "block", width: "100%", marginTop: "8px", marginBottom: "15px", padding: "10px", boxSizing: "border-box" }}
+              />
+
+              <button onClick={submitWithdrawal}>
+                💸 Submit Withdrawal Request
+              </button>
+            </div>
+
+            <div style={{ overflowX: "auto", marginTop: "25px" }}>
+              <h3>📋 Withdrawal History</h3>
+              {withdrawals.length === 0 ? (
+                <p>No withdrawal requests yet.</p>
+              ) : (
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Method</th>
+                      <th>Account</th>
+                      <th>Amount</th>
+                      <th>Status</th>
+                      <th>Created</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {withdrawals.map((withdrawal) => (
+                      <tr key={withdrawal.id}>
+                        <td>#{withdrawal.id}</td>
+                        <td>{withdrawal.method}</td>
+                        <td>{withdrawal.account}</td>
+                        <td>₨{Number(withdrawal.amount).toFixed(2)}</td>
+                        <td>{withdrawal.status}</td>
+                        <td>{withdrawal.createdAt ? new Date(withdrawal.createdAt).toLocaleString() : "-"}</td>
+                        <td>
+                          {withdrawal.status === "Pending" ? (
+                            <>
+                              <button onClick={() => updateWithdrawalStatus(withdrawal.id, "Approved")}>
+                                ✅ Approve
+                              </button>
+                              <button
+                                onClick={() => updateWithdrawalStatus(withdrawal.id, "Rejected")}
+                                style={{ marginLeft: "6px" }}
+                              >
+                                ❌ Reject
+                              </button>
+                            </>
+                          ) : (
+                            withdrawal.status
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </div>
 
           </>
