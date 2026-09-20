@@ -3,8 +3,13 @@ import "./App.css";
 
 const API = "https://smm-panel-production-6c8e.up.railway.app";
 
+const authHeaders = () => {
+  const token = localStorage.getItem("smm_token");
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
 function App() {
-  const [loggedIn, setLoggedIn] = useState(false);
+  const [loggedIn, setLoggedIn] = useState(() => Boolean(localStorage.getItem("smm_token")));
   const [active, setActive] = useState("Dashboard");
 
   const [services, setServices] = useState([]);
@@ -45,22 +50,22 @@ function App() {
 
   useEffect(() => {
     if ((active === "Admin" || active === "Dashboard")) {
-      fetch(`${API}/api/admin/orders`)
+      fetch(`${API}/api/admin/orders`, { headers: authHeaders() })
         .then((res) => res.json())
         .then((data) => setAdminOrders(data))
         .catch((err) => console.log("Admin orders error:", err));
 
-      fetch(`${API}/api/admin/deposits`)
+      fetch(`${API}/api/admin/deposits`, { headers: authHeaders() })
         .then((res) => res.json())
         .then((data) => setDeposits(data))
         .catch((err) => console.log("Admin deposits error:", err));
 
-      fetch(`${API}/api/admin/profit`)
+      fetch(`${API}/api/admin/profit`, { headers: authHeaders() })
         .then((res) => res.json())
         .then((data) => setProfitSummary(data))
         .catch((err) => console.log("Profit summary error:", err));
 
-      fetch(`${API}/api/admin/withdrawals`)
+      fetch(`${API}/api/admin/withdrawals`, { headers: authHeaders() })
         .then((res) => res.json())
         .then((data) => setWithdrawals(data))
         .catch((err) => console.log("Withdrawals error:", err));
@@ -105,7 +110,7 @@ function App() {
       setDepositAmount("");
       setTransactionId("");
 
-      fetch(`${API}/api/admin/deposits`)
+      fetch(`${API}/api/admin/deposits`, { headers: authHeaders() })
         .then((res) => res.json())
         .then((data) => setDeposits(data))
         .catch((err) => console.log("Deposit history error:", err));
@@ -159,6 +164,7 @@ function App() {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
+          ...authHeaders(),
         },
         body: JSON.stringify({ status }),
       });
@@ -185,12 +191,12 @@ function App() {
   };
 
   const refreshWithdrawals = () => {
-    fetch(`${API}/api/admin/profit`)
+    fetch(`${API}/api/admin/profit`, { headers: authHeaders() })
       .then((res) => res.json())
       .then((data) => setProfitSummary(data))
       .catch((err) => console.log("Profit summary error:", err));
 
-    fetch(`${API}/api/admin/withdrawals`)
+    fetch(`${API}/api/admin/withdrawals`, { headers: authHeaders() })
       .then((res) => res.json())
       .then((data) => setWithdrawals(data))
       .catch((err) => console.log("Withdrawals error:", err));
@@ -217,7 +223,7 @@ function App() {
     try {
       const response = await fetch(`${API}/api/admin/withdrawals`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({
           amount,
           method: withdrawMethod,
@@ -248,7 +254,7 @@ function App() {
         `${API}/api/admin/withdrawals/${withdrawalId}/status`,
         {
           method: "PATCH",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...authHeaders() },
           body: JSON.stringify({ status }),
         }
       );
@@ -269,12 +275,12 @@ function App() {
   };
 
   const refreshAdminOrders = () => {
-    fetch(`${API}/api/admin/orders`)
+    fetch(`${API}/api/admin/orders`, { headers: authHeaders() })
       .then((res) => res.json())
       .then((data) => setAdminOrders(data))
       .catch((err) => console.log("Admin orders error:", err));
 
-    fetch(`${API}/api/admin/deposits`)
+    fetch(`${API}/api/admin/deposits`, { headers: authHeaders() })
       .then((res) => res.json())
       .then((data) => setDeposits(data))
       .catch((err) => console.log("Admin deposits error:", err));
@@ -289,6 +295,21 @@ function App() {
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
+
+  useEffect(() => {
+    if (!localStorage.getItem("smm_token")) return;
+    fetch(`${API}/api/me`, { headers: authHeaders() })
+      .then((res) => {
+        if (!res.ok) throw new Error("Session expired");
+        return res.json();
+      })
+      .then((data) => setCurrentUser(data.user))
+      .catch(() => {
+        localStorage.removeItem("smm_token");
+        setLoggedIn(false);
+        setCurrentUser(null);
+      });
+  }, []);
 
   const handleAuth = async (event) => {
     event.preventDefault();
@@ -328,6 +349,9 @@ function App() {
         return;
       }
 
+      if (data.token) {
+        localStorage.setItem("smm_token", data.token);
+      }
       setCurrentUser(data.user);
       setLoggedIn(true);
       setAuthName("");
@@ -442,13 +466,26 @@ function App() {
           💰 Balance
         </button>
 
-        <button onClick={() => setActive("Admin")}>
-          👑 Admin Panel
-        </button>
+        {currentUser?.role === "admin" && (
+          <button onClick={() => setActive("Admin")}>
+            👑 Admin Panel
+          </button>
+        )}
 
         <button
           className="logout"
-          onClick={() => setLoggedIn(false)}
+          onClick={async () => {
+            try {
+              await fetch(`${API}/api/logout`, {
+                method: "POST",
+                headers: authHeaders(),
+              });
+            } catch {}
+            localStorage.removeItem("smm_token");
+            setLoggedIn(false);
+            setCurrentUser(null);
+            setActive("Dashboard");
+          }}
         >
           🚪 Logout
         </button>
@@ -763,7 +800,7 @@ function App() {
             )}
           </div>
         )}
-        {active === "Admin" && (
+        {active === "Admin" && currentUser?.role === "admin" && (
           <>
             <div className="panel">
               <div className="admin-header">
