@@ -6,7 +6,9 @@ const { DatabaseSync } = require("node:sqlite");
 const crypto = require("crypto");
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT || 3000);
+const adminEmail = String(process.env.ADMIN_EMAIL || "").trim().toLowerCase();
+const adminPassword = String(process.env.ADMIN_PASSWORD || "");
 
 app.use(cors());
 app.use(express.json());
@@ -34,6 +36,17 @@ db.exec(`
 `);
 
 // Orders table
+// Login sessions
+db.exec(`
+    CREATE TABLE IF NOT EXISTS sessions (
+        token TEXT PRIMARY KEY,
+        userId INTEGER NOT NULL,
+        createdAt TEXT NOT NULL,
+        expiresAt TEXT NOT NULL,
+        FOREIGN KEY (userId) REFERENCES users(id)
+    )
+`);
+
 db.exec(`
     CREATE TABLE IF NOT EXISTS orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -123,6 +136,75 @@ function verifyPassword(password, storedHash) {
     );
 }
 
+// Session authentication
+const SESSION_DAYS = 7;
+
+function createSession(userId) {
+    const token = crypto.randomBytes(32).toString("hex");
+    const now = new Date();
+    const expires = new Date(now.getTime() + SESSION_DAYS * 24 * 60 * 60 * 1000);
+    db.prepare(
+        "INSERT INTO sessions (token, userId, createdAt, expiresAt) VALUES (?, ?, ?, ?)"
+    ).run(token, userId, now.toISOString(), expires.toISOString());
+    return token;
+}
+
+function getAuthUser(req) {
+    const header = String(req.headers.authorization || "");
+    if (!header.startsWith("Bearer ")) return null;
+    const token = header.slice(7).trim();
+    if (!token) return null;
+
+    const session = db.prepare(`
+        SELECT u.id, u.name, u.email, u.role, s.expiresAt
+        FROM sessions s
+        JOIN users u ON u.id = s.userId
+        WHERE s.token = ?
+    `).get(token);
+
+    if (!session) return null;
+
+    if (new Date(session.expiresAt).getTime() <= Date.now()) {
+        db.prepare("DELETE FROM sessions WHERE token = ?").run(token);
+        return null;
+    }
+
+    return session;
+}
+
+function requireAuth(req, res, next) {
+    const user = getAuthUser(req);
+    if (!user) {
+        return res.status(401).json({ error: "Authentication required" });
+    }
+    req.user = user;
+    next();
+}
+
+function requireAdmin(req, res, next) {
+    const user = getAuthUser(req);
+    if (!user) {
+        return res.status(401).json({ error: "Authentication required" });
+    }
+    if (user.role !== "admin") {
+        return res.status(403).json({ error: "Admin access required" });
+    }
+    req.user = user;
+    next();
+}
+
+// Bootstrap an admin account from Railway Variables.
+if (adminEmail && adminPassword.length >= 8) {
+    const existingAdmin = db.prepare("SELECT id FROM users WHERE email = ?").get(adminEmail);
+    if (existingAdmin) {
+        db.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(existingAdmin.id);
+    } else {
+        db.prepare(
+            "INSERT INTO users (name, email, passwordHash, role, createdAt) VALUES (?, ?, ?, ?, ?)"
+        ).run("Administrator", adminEmail, hashPassword(adminPassword), "admin", new Date().toISOString());
+    }
+}
+
 // Register
 app.post("/api/register", (req, res) => {
     const { name, email, password } = req.body;
@@ -205,9 +287,12 @@ app.post("/api/login", (req, res) => {
         });
     }
 
+    const token = createSession(user.id);
+
     res.json({
         success: true,
         message: "Login successful",
+        token,
         user: {
             id: user.id,
             name: user.name,
@@ -215,6 +300,24 @@ app.post("/api/login", (req, res) => {
             role: user.role
         }
     });
+});
+
+app.get("/api/me", requireAuth, (req, res) => {
+    res.json({
+        user: {
+            id: req.user.id,
+            name: req.user.name,
+            email: req.user.email,
+            role: req.user.role
+        }
+    });
+});
+
+app.post("/api/logout", requireAuth, (req, res) => {
+    const header = String(req.headers.authorization || "");
+    const token = header.slice(7).trim();
+    db.prepare("DELETE FROM sessions WHERE token = ?").run(token);
+    res.json({ success: true });
 });
 
 app.get("/", (req, res) => {
@@ -318,13 +421,13 @@ app.get("/api/orders", (req, res) => {
 });
 
 // Admin - Get all orders
-app.get("/api/admin/orders", (req, res) => {
+app.get("/api/admin/orders", requireAdmin, (req, res) => {
     const orders = db.prepare("SELECT * FROM orders ORDER BY id DESC").all();
     res.json(orders);
 });
 
 // Admin - Update order status
-app.patch("/api/admin/orders/:id/status", (req, res) => {
+app.patch("/api/admin/orders/:id/status", requireAdmin, (req, res) => {
     const { status } = req.body;
     const allowedStatuses = ["Pending", "Processing", "Completed", "Cancelled"];
 
@@ -405,13 +508,13 @@ app.post("/api/deposits", (req, res) => {
 });
 
 // Admin deposit requests
-app.get("/api/admin/deposits", (req, res) => {
+app.get("/api/admin/deposits", requireAdmin, (req, res) => {
     const deposits = db.prepare("SELECT * FROM deposits ORDER BY id DESC").all();
     res.json(deposits);
 });
 
 // Admin deposit status
-app.patch("/api/admin/deposits/:id/status", (req, res) => {
+app.patch("/api/admin/deposits/:id/status", requireAdmin, (req, res) => {
     const depositId = Number(req.params.id);
     const { status } = req.body;
 
@@ -471,7 +574,9 @@ app.post("/api/orders", (req, res) => {
         { id: 5, price: 280 },
         { id: 6, price: 500 },
         { id: 7, price: 180 },
-        { id: 8, price: 300 }
+        { id: 8, price: 300 },
+        { id: 9, price: 200 },
+        { id: 10, price: 450 }
     ];
 
     const service = services.find(
@@ -550,7 +655,7 @@ app.post("/api/orders", (req, res) => {
 // ==================== PROFIT WITHDRAWAL SYSTEM ====================
 
 // Get profit summary
-app.get("/api/admin/profit", (req, res) => {
+app.get("/api/admin/profit", requireAdmin, (req, res) => {
     const result = db.prepare(`
         SELECT
             COALESCE(SUM(profit), 0) AS totalProfit
@@ -577,7 +682,7 @@ app.get("/api/admin/profit", (req, res) => {
 
 
 // Create withdrawal request
-app.post("/api/admin/withdrawals", (req, res) => {
+app.post("/api/admin/withdrawals", requireAdmin, (req, res) => {
     const { amount, method, account } = req.body;
 
     const withdrawalAmount = Number(amount);
@@ -643,7 +748,7 @@ app.post("/api/admin/withdrawals", (req, res) => {
 
 
 // Get withdrawal history
-app.get("/api/admin/withdrawals", (req, res) => {
+app.get("/api/admin/withdrawals", requireAdmin, (req, res) => {
     const withdrawals = db.prepare(`
         SELECT *
         FROM withdrawals
@@ -655,7 +760,7 @@ app.get("/api/admin/withdrawals", (req, res) => {
 
 
 // Approve or reject withdrawal
-app.patch("/api/admin/withdrawals/:id/status", (req, res) => {
+app.patch("/api/admin/withdrawals/:id/status", requireAdmin, (req, res) => {
     const id = Number(req.params.id);
     const { status } = req.body;
 
