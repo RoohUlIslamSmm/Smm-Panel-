@@ -2122,7 +2122,7 @@ function App() {
                                       style={{
                                         marginLeft:
                                           "6px",
-                                      }}
+                                       }}
                                     >
                                       ❌ Reject
                                     </button>
