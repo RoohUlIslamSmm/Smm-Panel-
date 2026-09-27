@@ -14,6 +14,26 @@ const adminEmail = String(process.env.ADMIN_EMAIL || "")
 
 const adminPassword = String(process.env.ADMIN_PASSWORD || "");
 
+// ==================== SMM WORLD PROVIDER ====================
+// The provider API key must ONLY live in Railway/environment variables.
+const SMM_WORLD_API_URL = String(
+    process.env.SMM_WORLD_API_URL ||
+    "https://my.smmworld.org/api/v2"
+).trim();
+
+const SMM_WORLD_API_KEY = String(
+    process.env.SMM_WORLD_API_KEY || ""
+).trim();
+
+const SMM_WORLD_USD_TO_PKR = Number(
+    process.env.SMM_WORLD_USD_TO_PKR || 0
+);
+
+const PROVIDER_STATUS_INTERVAL_MS = Math.max(
+    2 * 60 * 1000,
+    Number(process.env.SMM_WORLD_STATUS_INTERVAL_MS || 180000)
+);
+
 app.use(cors());
 app.use(express.json());
 
@@ -79,6 +99,21 @@ if (!orderColumns.some((column) => column.name === "profit")) {
     );
 }
 
+for (const [column, definition] of [
+    ["providerOrderId", "TEXT"],
+    ["providerServiceId", "INTEGER"],
+    ["providerStatus", "TEXT"],
+    ["providerCharge", "REAL"],
+    ["providerCurrency", "TEXT"],
+    ["providerLastCheckedAt", "TEXT"],
+    ["providerError", "TEXT"],
+    ["submissionState", "TEXT NOT NULL DEFAULT 'local'"],
+]) {
+    if (!orderColumns.some((item) => item.name === column)) {
+        db.exec(`ALTER TABLE orders ADD COLUMN ${column} ${definition}`);
+    }
+}
+
 // ==================== BALANCE ====================
 
 db.exec(`
@@ -120,6 +155,23 @@ if (!depositColumns.some((column) => column.name === "transactionId")) {
         "ALTER TABLE deposits ADD COLUMN transactionId TEXT"
     );
 }
+
+// ==================== PROVIDER SERVICE MAPPING ====================
+
+db.exec(`
+    CREATE TABLE IF NOT EXISTS provider_service_map (
+        localServiceId INTEGER PRIMARY KEY,
+        providerServiceId INTEGER NOT NULL,
+        providerName TEXT,
+        providerType TEXT,
+        providerRate REAL,
+        providerMin INTEGER,
+        providerMax INTEGER,
+        providerRefill INTEGER DEFAULT 0,
+        providerCancel INTEGER DEFAULT 0,
+        updatedAt TEXT NOT NULL
+    )
+`);
 
 // ==================== STARTING BALANCE ====================
 
@@ -255,6 +307,215 @@ function getAuthUser(req) {
     }
 
     return session;
+}
+
+// ==================== SMM WORLD API CLIENT ====================
+
+function providerConfigured() {
+    return Boolean(SMM_WORLD_API_KEY);
+}
+
+async function smmWorldRequest(payload) {
+    if (!providerConfigured()) {
+        throw new Error("SMM World API key is not configured");
+    }
+
+    const response = await fetch(SMM_WORLD_API_URL, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            key: SMM_WORLD_API_KEY,
+            ...payload,
+        }),
+    });
+
+    const data = await response.json().catch(() => null);
+
+    if (!response.ok) {
+        throw new Error(`SMM World HTTP ${response.status}`);
+    }
+
+    if (!data || typeof data !== "object") {
+        throw new Error("Invalid response from SMM World");
+    }
+
+    if (data.error) {
+        throw new Error(String(data.error));
+    }
+
+    return data;
+}
+
+async function getProviderServices() {
+    const data = await smmWorldRequest({ action: "services" });
+    if (!Array.isArray(data)) {
+        throw new Error("SMM World returned an invalid services list");
+    }
+    return data;
+}
+
+async function addProviderOrder({ serviceId, link, quantity }) {
+    return smmWorldRequest({
+        action: "add",
+        service: Number(serviceId),
+        link,
+        quantity: Number(quantity),
+    });
+}
+
+async function getProviderOrderStatus(providerOrderId) {
+    return smmWorldRequest({
+        action: "status",
+        order: String(providerOrderId),
+    });
+}
+
+async function getProviderBalance() {
+    return smmWorldRequest({ action: "balance" });
+}
+
+function mapProviderStatus(status) {
+    const value = String(status || "").toLowerCase();
+
+    if (value === "completed") return "Completed";
+    if (value === "partial") return "Partial";
+    if (value === "canceled" || value === "cancelled") return "Cancelled";
+    if (value === "in progress" || value === "processing") return "Processing";
+    if (value === "pending") return "Pending";
+
+    return "Processing";
+}
+
+function updateOrderProviderFinancials(orderId, providerStatus) {
+    const charge = Number(providerStatus.charge);
+    const currency = String(providerStatus.currency || "").toUpperCase();
+
+    if (!Number.isFinite(charge) || charge < 0) {
+        return;
+    }
+
+    const existing = db.prepare(
+        "SELECT cost FROM orders WHERE id = ?"
+    ).get(orderId);
+
+    if (!existing) return;
+
+    let providerCostPkr = null;
+
+    if (currency === "PKR") {
+        providerCostPkr = charge;
+    } else if (currency === "USD" && SMM_WORLD_USD_TO_PKR > 0) {
+        providerCostPkr = charge * SMM_WORLD_USD_TO_PKR;
+    }
+
+    if (providerCostPkr === null) {
+        return;
+    }
+
+    const profit = Number(existing.cost) - providerCostPkr;
+
+    db.prepare(`
+        UPDATE orders
+        SET providerCharge = ?,
+            providerCurrency = ?,
+            profit = ?
+        WHERE id = ?
+    `).run(
+        charge,
+        currency || null,
+        profit,
+        orderId
+    );
+}
+
+async function refreshProviderOrder(order) {
+    if (!order.providerOrderId) return null;
+
+    try {
+        const providerStatus = await getProviderOrderStatus(
+            order.providerOrderId
+        );
+
+        const localStatus = mapProviderStatus(
+            providerStatus.status
+        );
+
+        db.prepare(`
+            UPDATE orders
+            SET status = ?,
+                providerStatus = ?,
+                providerCharge = CASE
+                    WHEN ? IS NOT NULL THEN ?
+                    ELSE providerCharge
+                END,
+                providerCurrency = CASE
+                    WHEN ? IS NOT NULL THEN ?
+                    ELSE providerCurrency
+                END,
+                providerLastCheckedAt = ?,
+                providerError = NULL
+            WHERE id = ?
+        `).run(
+            localStatus,
+            String(providerStatus.status || ""),
+            Number.isFinite(Number(providerStatus.charge))
+                ? Number(providerStatus.charge)
+                : null,
+            Number.isFinite(Number(providerStatus.charge))
+                ? Number(providerStatus.charge)
+                : null,
+            providerStatus.currency
+                ? String(providerStatus.currency)
+                : null,
+            providerStatus.currency
+                ? String(providerStatus.currency)
+                : null,
+            new Date().toISOString(),
+            order.id
+        );
+
+        updateOrderProviderFinancials(order.id, providerStatus);
+
+        return providerStatus;
+    } catch (error) {
+        console.error(
+            `Provider status error for local order #${order.id}:`,
+            error.message
+        );
+
+        db.prepare(`
+            UPDATE orders
+            SET providerLastCheckedAt = ?,
+                providerError = ?
+            WHERE id = ?
+        `).run(
+            new Date().toISOString(),
+            String(error.message || "Provider status check failed").slice(0, 500),
+            order.id
+        );
+
+        return null;
+    }
+}
+
+async function syncActiveProviderOrders() {
+    if (!providerConfigured()) return;
+
+    const orders = db.prepare(`
+        SELECT *
+        FROM orders
+        WHERE providerOrderId IS NOT NULL
+          AND providerOrderId != ''
+          AND status IN ('Pending', 'Processing', 'Partial')
+        ORDER BY id ASC
+        LIMIT 100
+    `).all();
+
+    for (const order of orders) {
+        await refreshProviderOrder(order);
+    }
 }
 
 // ==================== AUTH MIDDLEWARE ====================
@@ -524,10 +785,49 @@ app.get("/", (req, res) => {
     );
 });
 
+// ==================== LOCAL SERVICES ====================
+
+const LOCAL_SERVICES = [
+    { id: 1, name: "Instagram Likes", category: "Instagram", price: 150, status: "active" },
+    { id: 2, name: "Instagram Followers", category: "Instagram", price: 250, status: "active" },
+    { id: 3, name: "TikTok Likes", category: "TikTok", price: 130, status: "active" },
+    { id: 4, name: "TikTok Followers", category: "TikTok", price: 300, status: "active" },
+    { id: 5, name: "YouTube Views", category: "YouTube", price: 280, status: "active" },
+    { id: 6, name: "YouTube Subscribers", category: "YouTube", price: 500, status: "active" },
+    { id: 9, name: "YouTube Likes", category: "YouTube", price: 200, status: "active" },
+    { id: 10, name: "YouTube Watch Time", category: "YouTube", price: 450, status: "active" },
+    { id: 7, name: "Facebook Likes", category: "Facebook", price: 180, status: "active" },
+    { id: 8, name: "Facebook Followers", category: "Facebook", price: 300, status: "active" },
+];
+
 // ==================== SERVICES ====================
 
 app.get("/api/services", (req, res) => {
-    res.json([
+    res.json(
+        LOCAL_SERVICES.map((service) => {
+            const mapping = db.prepare(`
+                SELECT providerServiceId, providerName, providerMin, providerMax,
+                       providerRate, providerRefill, providerCancel
+                FROM provider_service_map
+                WHERE localServiceId = ?
+            `).get(service.id);
+
+            return {
+                ...service,
+                providerConfigured: Boolean(mapping),
+                providerServiceId: mapping?.providerServiceId || null,
+                providerName: mapping?.providerName || null,
+                min: mapping?.providerMin || null,
+                max: mapping?.providerMax || null,
+                refill: Boolean(mapping?.providerRefill),
+                cancel: Boolean(mapping?.providerCancel),
+            };
+        })
+    );
+});
+
+/* Legacy route body replaced below. */
+/*
         {
             id: 1,
             name: "Instagram Likes",
@@ -598,8 +898,9 @@ app.get("/api/services", (req, res) => {
             price: 300,
             status: "active"
         }
-    ]);
+'    ]);
 });
+*/
 
 // ==================== BALANCE ====================
 // Customer must be logged in.
@@ -939,143 +1240,235 @@ app.patch(
 app.post(
     "/api/orders",
     requireAuth,
-    (req, res) => {
+    async (req, res) => {
         const {
             serviceId,
             link,
-            quantity
+            quantity,
         } = req.body;
 
-        if (
-            !serviceId ||
-            !link ||
-            !quantity
-        ) {
+        const localServiceId = Number(serviceId);
+        const qty = Number(quantity);
+        const cleanLink = String(link || "").trim();
+
+        if (!Number.isInteger(localServiceId) || !cleanLink || !quantity) {
             return res.status(400).json({
-                error:
-                    "serviceId, link and quantity are required"
+                error: "serviceId, link and quantity are required",
             });
         }
 
-        const services = [
-            { id: 1, price: 150 },
-            { id: 2, price: 250 },
-            { id: 3, price: 130 },
-            { id: 4, price: 300 },
-            { id: 5, price: 280 },
-            { id: 6, price: 500 },
-            { id: 7, price: 180 },
-            { id: 8, price: 300 },
-            { id: 9, price: 200 },
-            { id: 10, price: 450 }
-        ];
-
-        const service =
-            services.find(
-                (s) =>
-                    s.id ===
-                    Number(serviceId)
-            );
+        const service = LOCAL_SERVICES.find(
+            (item) => item.id === localServiceId
+        );
 
         if (!service) {
             return res.status(400).json({
-                error:
-                    "Invalid service"
+                error: "Invalid service",
             });
         }
 
-        const qty =
-            Number(quantity);
-
-        if (
-            !Number.isInteger(qty) ||
-            qty <= 0
-        ) {
+        if (!Number.isInteger(qty) || qty <= 0) {
             return res.status(400).json({
-                error:
-                    "Quantity must be a positive number"
+                error: "Quantity must be a positive whole number",
             });
         }
 
-        const cost =
-            (qty / 1000) *
-            service.price;
+        const mapping = db.prepare(`
+            SELECT *
+            FROM provider_service_map
+            WHERE localServiceId = ?
+        `).get(localServiceId);
 
-        const providerCost =
-            (qty / 1000) * 6;
+        if (!providerConfigured()) {
+            return res.status(503).json({
+                error: "SMM World API is not configured yet. Add SMM_WORLD_API_KEY in Railway Variables.",
+            });
+        }
 
-        const profit =
-            cost - providerCost;
+        if (!mapping) {
+            return res.status(503).json({
+                error: `Service "${service.name}" is not connected to an SMM World service yet. Open Admin Panel → SMM World Setup and map it first.`,
+            });
+        }
 
-        const account =
-            db.prepare(
-                "SELECT balance FROM account WHERE id = 1"
-            ).get();
-
-        if (
-            account.balance < cost
-        ) {
+        if (mapping.providerMin && qty < Number(mapping.providerMin)) {
             return res.status(400).json({
-                error:
-                    "Insufficient balance",
-                balance:
-                    account.balance,
-                required:
-                    cost
+                error: `Minimum quantity for this provider service is ${mapping.providerMin}`,
             });
         }
 
-        const createdAt =
-            new Date().toISOString();
+        if (mapping.providerMax && qty > Number(mapping.providerMax)) {
+            return res.status(400).json({
+                error: `Maximum quantity for this provider service is ${mapping.providerMax}`,
+            });
+        }
 
-        const result = db.prepare(`
-            INSERT INTO orders
-            (
-                serviceId,
-                link,
-                quantity,
-                status,
+        const cost = (qty / 1000) * Number(service.price);
+
+        const account = db.prepare(
+            "SELECT balance FROM account WHERE id = 1"
+        ).get();
+
+        if (!account || Number(account.balance) < cost) {
+            return res.status(400).json({
+                error: "Insufficient balance",
+                balance: Number(account?.balance || 0),
+                required: cost,
+            });
+        }
+
+        const createdAt = new Date().toISOString();
+
+        // Reserve customer funds before sending to the provider.
+        // If the provider rejects the order, the reservation is returned.
+        // The final profit is recalculated from the provider's actual charge
+        // as soon as a status response includes charge + currency.
+        const provisionalProfit = 0;
+
+        db.exec("BEGIN");
+        let localOrderId;
+        try {
+            const result = db.prepare(`
+                INSERT INTO orders
+                (
+                    serviceId,
+                    link,
+                    quantity,
+                    status,
+                    createdAt,
+                    cost,
+                    profit,
+                    providerServiceId,
+                    submissionState
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+                localServiceId,
+                cleanLink,
+                qty,
+                "Pending",
                 createdAt,
                 cost,
-                profit
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(
-            Number(serviceId),
-            link,
-            qty,
-            "Pending",
-            createdAt,
-            cost,
-            profit
-        );
-
-        db.prepare(`
-            UPDATE account
-            SET balance = balance - ?
-            WHERE id = 1
-        `).run(cost);
-
-        const order =
-            db.prepare(
-                "SELECT * FROM orders WHERE id = ?"
-            ).get(
-                Number(result.lastInsertRowid)
+                provisionalProfit,
+                Number(mapping.providerServiceId),
+                "submitting"
             );
 
-        const newBalance =
-            db.prepare(
+            localOrderId = Number(result.lastInsertRowid);
+
+            db.prepare(`
+                UPDATE account
+                SET balance = balance - ?
+                WHERE id = 1
+            `).run(cost);
+
+            db.exec("COMMIT");
+        } catch (error) {
+            db.exec("ROLLBACK");
+            console.error("Local order reservation error:", error);
+            return res.status(500).json({
+                error: "Could not create order reservation",
+            });
+        }
+
+        let providerResponse;
+        try {
+            providerResponse = await addProviderOrder({
+                serviceId: mapping.providerServiceId,
+                link: cleanLink,
+                quantity: qty,
+            });
+        } catch (error) {
+            db.exec("BEGIN");
+            try {
+                db.prepare(`
+                    UPDATE account
+                    SET balance = balance + ?
+                    WHERE id = 1
+                `).run(cost);
+
+                db.prepare(`
+                    UPDATE orders
+                    SET status = 'Cancelled',
+                        submissionState = 'failed',
+                        providerError = ?,
+                        profit = 0
+                    WHERE id = ?
+                `).run(
+                    String(error.message || "Provider rejected order").slice(0, 500),
+                    localOrderId
+                );
+
+                db.exec("COMMIT");
+            } catch (rollbackError) {
+                db.exec("ROLLBACK");
+                console.error("Order refund error:", rollbackError);
+            }
+
+            return res.status(502).json({
+                error: `SMM World order failed: ${String(error.message || "Unknown provider error")}`,
+                refunded: true,
+            });
+        }
+
+        const providerOrderId = providerResponse?.order;
+
+        if (!providerOrderId) {
+            // The provider answered but did not return a usable order ID.
+            // Do NOT blindly submit again: that could create a duplicate order.
+            db.prepare(`
+                UPDATE orders
+                SET status = 'Pending',
+                    submissionState = 'unknown',
+                    providerError = ?
+                WHERE id = ?
+            `).run(
+                "Provider response did not include an order ID. Manual reconciliation required.",
+                localOrderId
+            );
+
+            const order = db.prepare(
+                "SELECT * FROM orders WHERE id = ?"
+            ).get(localOrderId);
+
+            const newBalance = db.prepare(
                 "SELECT balance FROM account WHERE id = 1"
             ).get();
+
+            return res.status(202).json({
+                success: false,
+                message: "Provider response needs reconciliation; the order was not resubmitted automatically.",
+                balance: Number(newBalance.balance),
+                order,
+            });
+        }
+
+        db.prepare(`
+            UPDATE orders
+            SET providerOrderId = ?,
+                providerStatus = 'Pending',
+                submissionState = 'submitted',
+                providerError = NULL
+            WHERE id = ?
+        `).run(
+            String(providerOrderId),
+            localOrderId
+        );
+
+        const order = db.prepare(
+            "SELECT * FROM orders WHERE id = ?"
+        ).get(localOrderId);
+
+        const newBalance = db.prepare(
+            "SELECT balance FROM account WHERE id = 1"
+        ).get();
 
         res.json({
             success: true,
-            message:
-                "Order created successfully",
+            message: "Order submitted to SMM World successfully",
             cost,
-            balance:
-                newBalance.balance,
-            order
+            balance: Number(newBalance.balance),
+            order,
         });
     }
 );
@@ -1378,6 +1771,179 @@ app.patch(
     }
 );
 
+// ==================== SMM WORLD ADMIN SETUP ====================
+
+app.get(
+    "/api/admin/provider/status",
+    requireAdmin,
+    async (req, res) => {
+        if (!providerConfigured()) {
+            return res.json({
+                configured: false,
+                apiUrl: SMM_WORLD_API_URL,
+                message: "SMM_WORLD_API_KEY is missing",
+            });
+        }
+
+        try {
+            const balance = await getProviderBalance();
+            const mappings = db.prepare(`
+                SELECT localServiceId, providerServiceId, providerName,
+                       providerRate, providerMin, providerMax,
+                       providerRefill, providerCancel, updatedAt
+                FROM provider_service_map
+                ORDER BY localServiceId ASC
+            `).all();
+
+            res.json({
+                configured: true,
+                apiUrl: SMM_WORLD_API_URL,
+                balance: Number(balance.balance || 0),
+                currency: balance.currency || null,
+                mappings,
+            });
+        } catch (error) {
+            res.status(502).json({
+                configured: true,
+                apiUrl: SMM_WORLD_API_URL,
+                error: String(error.message || "SMM World connection failed"),
+            });
+        }
+    }
+);
+
+app.get(
+    "/api/admin/provider/services",
+    requireAdmin,
+    async (req, res) => {
+        try {
+            const services = await getProviderServices();
+            res.json({ services });
+        } catch (error) {
+            res.status(502).json({
+                error: String(error.message || "Could not load SMM World services"),
+            });
+        }
+    }
+);
+
+app.get(
+    "/api/admin/provider/mappings",
+    requireAdmin,
+    (req, res) => {
+        const mappings = LOCAL_SERVICES.map((local) => {
+            const mapping = db.prepare(`
+                SELECT *
+                FROM provider_service_map
+                WHERE localServiceId = ?
+            `).get(local.id);
+
+            return {
+                localService: local,
+                mapping: mapping || null,
+            };
+        });
+
+        res.json({ mappings });
+    }
+);
+
+app.put(
+    "/api/admin/provider/mappings/:localServiceId",
+    requireAdmin,
+    async (req, res) => {
+        const localServiceId = Number(req.params.localServiceId);
+        const providerServiceId = Number(req.body.providerServiceId);
+
+        if (!Number.isInteger(localServiceId) || !Number.isInteger(providerServiceId)) {
+            return res.status(400).json({
+                error: "Valid local service ID and provider service ID are required",
+            });
+        }
+
+        const localService = LOCAL_SERVICES.find(
+            (item) => item.id === localServiceId
+        );
+
+        if (!localService) {
+            return res.status(404).json({ error: "Local service not found" });
+        }
+
+        let providerService;
+        try {
+            const services = await getProviderServices();
+            providerService = services.find(
+                (item) => Number(item.service) === providerServiceId
+            );
+        } catch (error) {
+            return res.status(502).json({
+                error: String(error.message || "Could not verify provider service"),
+            });
+        }
+
+        if (!providerService) {
+            return res.status(400).json({
+                error: "That SMM World service ID was not found in the current catalog",
+            });
+        }
+
+        const updatedAt = new Date().toISOString();
+
+        db.prepare(`
+            INSERT INTO provider_service_map
+            (
+                localServiceId,
+                providerServiceId,
+                providerName,
+                providerType,
+                providerRate,
+                providerMin,
+                providerMax,
+                providerRefill,
+                providerCancel,
+                updatedAt
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(localServiceId) DO UPDATE SET
+                providerServiceId = excluded.providerServiceId,
+                providerName = excluded.providerName,
+                providerType = excluded.providerType,
+                providerRate = excluded.providerRate,
+                providerMin = excluded.providerMin,
+                providerMax = excluded.providerMax,
+                providerRefill = excluded.providerRefill,
+                providerCancel = excluded.providerCancel,
+                updatedAt = excluded.updatedAt
+        `).run(
+            localServiceId,
+            providerServiceId,
+            String(providerService.name || ""),
+            String(providerService.type || ""),
+            Number(providerService.rate || 0),
+            Number(providerService.min || 0),
+            Number(providerService.max || 0),
+            providerService.refill ? 1 : 0,
+            providerService.cancel ? 1 : 0,
+            updatedAt
+        );
+
+        res.json({
+            success: true,
+            localService,
+            providerService,
+        });
+    }
+);
+
+app.post(
+    "/api/admin/provider/refresh-active-orders",
+    requireAdmin,
+    async (req, res) => {
+        await syncActiveProviderOrders();
+        res.json({ success: true });
+    }
+);
+
 // ==================== START SERVER ====================
 
 app.listen(
@@ -1391,5 +1957,27 @@ app.listen(
         console.log(
             `PORT: ${PORT}`
         );
+
+        console.log(
+            `SMM World API: ${SMM_WORLD_API_URL}`
+        );
+
+        console.log(
+            `SMM World key configured: ${providerConfigured() ? "YES" : "NO"}`
+        );
+
+        if (providerConfigured()) {
+            setTimeout(() => {
+                syncActiveProviderOrders().catch((error) =>
+                    console.error("Initial provider sync error:", error.message)
+                );
+            }, 5000);
+
+            setInterval(() => {
+                syncActiveProviderOrders().catch((error) =>
+                    console.error("Provider sync error:", error.message)
+                );
+            }, PROVIDER_STATUS_INTERVAL_MS);
+        }
     }
 );
