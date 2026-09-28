@@ -36,6 +36,13 @@ function App() {
   const [withdrawMethod, setWithdrawMethod] = useState("Easypaisa");
   const [withdrawAccount, setWithdrawAccount] = useState("");
 
+  // SMM World admin setup
+  const [providerStatus, setProviderStatus] = useState(null);
+  const [providerServices, setProviderServices] = useState([]);
+  const [providerMappings, setProviderMappings] = useState([]);
+  const [providerLoading, setProviderLoading] = useState(false);
+  const [providerSavingId, setProviderSavingId] = useState(null);
+
   const [authMode, setAuthMode] = useState("login");
   const [authName, setAuthName] = useState("");
   const [authEmail, setAuthEmail] = useState("");
@@ -157,6 +164,126 @@ function App() {
       })
       .then((data) => setWithdrawals(data))
       .catch((err) => console.log("Withdrawals error:", err));
+  }, [active, loggedIn, currentUser]);
+
+  // Load SMM World provider setup for admins
+  const loadProviderSetup = async () => {
+    if (!currentUser || currentUser.role !== "admin") return;
+
+    setProviderLoading(true);
+
+    try {
+      const headers = authHeaders();
+
+      const [statusResponse, servicesResponse, mappingsResponse] =
+        await Promise.all([
+          fetch(`${API}/api/admin/provider/status`, {
+            headers,
+          }),
+          fetch(`${API}/api/admin/provider/services`, {
+            headers,
+          }),
+          fetch(`${API}/api/admin/provider/mappings`, {
+            headers,
+          }),
+        ]);
+
+      const statusData = await statusResponse.json().catch(() => ({}));
+      const servicesData = await servicesResponse.json().catch(() => ({}));
+      const mappingsData = await mappingsResponse.json().catch(() => ({}));
+
+      if (!statusResponse.ok) {
+        throw new Error(statusData.error || "Could not check SMM World status");
+      }
+
+      if (!servicesResponse.ok) {
+        throw new Error(
+          servicesData.error || "Could not load SMM World services"
+        );
+      }
+
+      if (!mappingsResponse.ok) {
+        throw new Error(
+          mappingsData.error || "Could not load service mappings"
+        );
+      }
+
+      setProviderStatus(statusData);
+      setProviderServices(
+        Array.isArray(servicesData.services) ? servicesData.services : []
+      );
+      setProviderMappings(
+        Array.isArray(mappingsData.mappings) ? mappingsData.mappings : []
+      );
+    } catch (error) {
+      setProviderStatus({
+        configured: false,
+        error: String(error.message || "SMM World setup failed"),
+      });
+      setProviderServices([]);
+      setProviderMappings([]);
+    } finally {
+      setProviderLoading(false);
+    }
+  };
+
+  const saveProviderMapping = async (localServiceId, providerServiceId) => {
+    const id = Number(providerServiceId);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      alert("Please select an SMM World service.");
+      return;
+    }
+
+    setProviderSavingId(localServiceId);
+
+    try {
+      const response = await fetch(
+        `${API}/api/admin/provider/mappings/${localServiceId}`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            ...authHeaders(),
+          },
+          body: JSON.stringify({
+            providerServiceId: id,
+          }),
+        }
+      );
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        alert(data.error || "Could not save service mapping");
+        return;
+      }
+
+      setProviderMappings((current) =>
+        current.map((item) =>
+          item.localService.id === localServiceId
+            ? { ...item, mapping: data.mapping }
+            : item
+        )
+      );
+
+      alert(`Mapping saved for ${data.mapping?.providerName || "service"}.`);
+      await loadProviderSetup();
+    } catch (error) {
+      alert(`Backend connection error: ${error.message}`);
+    } finally {
+      setProviderSavingId(null);
+    }
+  };
+
+  useEffect(() => {
+    if (
+      loggedIn &&
+      currentUser?.role === "admin" &&
+      active === "Admin"
+    ) {
+      loadProviderSetup();
+    }
   }, [active, loggedIn, currentUser]);
 
   const revenue = adminOrders.reduce((total, order) => {
@@ -1302,6 +1429,175 @@ function App() {
         {active === "Admin" &&
           currentUser?.role === "admin" && (
             <>
+              {/* SMM WORLD SETUP */}
+              <div className="panel">
+                <div className="admin-header">
+                  <div>
+                    <h2>🌐 SMM World Setup</h2>
+                    <p>
+                      Connect each local service to the correct SMM World
+                      provider service.
+                    </p>
+                  </div>
+
+                  <button
+                    className="admin-refresh"
+                    onClick={loadProviderSetup}
+                    disabled={providerLoading}
+                  >
+                    {providerLoading
+                      ? "⏳ Checking..."
+                      : "🔄 Refresh SMM World"}
+                  </button>
+                </div>
+
+                <div
+                  style={{
+                    padding: "14px",
+                    marginBottom: "18px",
+                    borderRadius: "10px",
+                    border: "1px solid #ddd",
+                  }}
+                >
+                  {providerStatus?.configured ? (
+                    <>
+                      <strong>✅ SMM World API Connected</strong>
+                      <p style={{ margin: "6px 0 0" }}>
+                        Provider balance:{" "}
+                        {providerStatus.balance !== undefined
+                          ? `${providerStatus.balance} ${
+                              providerStatus.currency || "USD"
+                            }`
+                          : "Available"}
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <strong>❌ SMM World API not connected</strong>
+                      <p style={{ margin: "6px 0 0" }}>
+                        {providerStatus?.error ||
+                          providerStatus?.message ||
+                          "Check the backend Railway Variables."}
+                      </p>
+                    </>
+                  )}
+                </div>
+
+                {providerServices.length === 0 ? (
+                  <p>
+                    No SMM World services loaded. Tap “Refresh SMM World” and
+                    check the API connection.
+                  </p>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table className="admin-table">
+                      <thead>
+                        <tr>
+                          <th>Local Service</th>
+                          <th>Our Price</th>
+                          <th>SMM World Service</th>
+                          <th>Provider ID</th>
+                          <th>Provider Rate</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {providerMappings.map((item) => {
+                          const currentId =
+                            item.mapping?.providerServiceId || "";
+
+                          return (
+                            <tr key={item.localService.id}>
+                              <td>
+                                <strong>{item.localService.name}</strong>
+                                <br />
+                                <small>{item.localService.category}</small>
+                              </td>
+                              <td>₨{item.localService.price}</td>
+                              <td>
+                                <select
+                                  value={currentId}
+                                  onChange={(event) => {
+                                    const selected = Number(
+                                      event.target.value
+                                    );
+
+                                    setProviderMappings((current) =>
+                                      current.map((entry) =>
+                                        entry.localService.id ===
+                                        item.localService.id
+                                          ? {
+                                              ...entry,
+                                              mapping: selected
+                                                ? {
+                                                    ...(entry.mapping || {}),
+                                                    providerServiceId:
+                                                      selected,
+                                                  }
+                                                : null,
+                                            }
+                                          : entry
+                                      )
+                                    );
+                                  }}
+                                  style={{
+                                    minWidth: "260px",
+                                    padding: "8px",
+                                  }}
+                                >
+                                  <option value="">
+                                    -- Select SMM World service --
+                                  </option>
+                                  {providerServices.map((service) => (
+                                    <option
+                                      key={service.service}
+                                      value={service.service}
+                                    >
+                                      #{service.service} — {service.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              </td>
+                              <td>
+                                {currentId ? `#${currentId}` : "Not mapped"}
+                              </td>
+                              <td>
+                                {item.mapping?.providerRate !== undefined
+                                  ? item.mapping.providerRate
+                                  : "-"}
+                              </td>
+                              <td>
+                                <button
+                                  onClick={() =>
+                                    saveProviderMapping(
+                                      item.localService.id,
+                                      currentId
+                                    )
+                                  }
+                                  disabled={
+                                    providerSavingId ===
+                                    item.localService.id
+                                  }
+                                >
+                                  {providerSavingId === item.localService.id
+                                    ? "Saving..."
+                                    : "💾 Save"}
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                <p style={{ marginTop: "15px", fontSize: "13px" }}>
+                  🔐 Your SMM World API key is kept on the backend Railway
+                  Variables. It is not displayed here.
+                </p>
+              </div>
+
               {/* ADMIN ORDERS */}
               <div className="panel">
                 <div className="admin-header">
