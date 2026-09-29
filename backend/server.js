@@ -173,6 +173,57 @@ db.exec(`
     )
 `);
 
+// ==================== DEFAULT SMM WORLD SERVICE MAPPINGS ====================
+// These are the verified SMM World service IDs selected for the 10 services
+// already offered by the Rooh Ul Islam SMM panel.
+//
+// INSERT OR IGNORE is intentional: it makes the mappings survive restarts
+// and fresh deployments without overwriting an admin's later manual change.
+const DEFAULT_PROVIDER_MAPPINGS = [
+    { localServiceId: 1, providerServiceId: 23998 }, // Instagram Likes
+    { localServiceId: 2, providerServiceId: 24260 }, // Instagram Followers
+    { localServiceId: 3, providerServiceId: 24244 }, // TikTok Likes
+    { localServiceId: 4, providerServiceId: 23937 }, // TikTok Followers
+    { localServiceId: 5, providerServiceId: 23416 }, // YouTube Views
+    { localServiceId: 6, providerServiceId: 23381 }, // YouTube Subscribers
+    { localServiceId: 9, providerServiceId: 23375 }, // YouTube Likes
+    { localServiceId: 10, providerServiceId: 23134 }, // YouTube Watch Time
+    { localServiceId: 7, providerServiceId: 22510 }, // Facebook Likes
+    { localServiceId: 8, providerServiceId: 23412 }, // Facebook Followers
+];
+
+const insertDefaultProviderMapping = db.prepare(`
+    INSERT OR IGNORE INTO provider_service_map
+    (
+        localServiceId,
+        providerServiceId,
+        providerName,
+        providerType,
+        providerRate,
+        providerMin,
+        providerMax,
+        providerRefill,
+        providerCancel,
+        updatedAt
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
+
+for (const mapping of DEFAULT_PROVIDER_MAPPINGS) {
+    insertDefaultProviderMapping.run(
+        mapping.localServiceId,
+        mapping.providerServiceId,
+        "SMM World",
+        "",
+        0,
+        0,
+        0,
+        0,
+        0,
+        new Date().toISOString()
+    );
+}
+
 // ==================== STARTING BALANCE ====================
 
 const account = db
@@ -1927,10 +1978,17 @@ app.put(
             updatedAt
         );
 
+        const savedMapping = db.prepare(`
+            SELECT *
+            FROM provider_service_map
+            WHERE localServiceId = ?
+        `).get(localServiceId);
+
         res.json({
             success: true,
             localService,
             providerService,
+            mapping: savedMapping,
         });
     }
 );
