@@ -822,7 +822,18 @@ function App() {
             <div className="panel dashboard-welcome">
               <h2>
                 👋 Welcome to Rooh Ul Islam SMM
-              </h2>
+             <img
+  src="/IMG_20261004_020022.Jpg"
+  alt="Rooh Ul Islam"
+  style={{
+    width: "100px",
+    height: "100px",
+    borderRadius: "50%",
+    objectFit: "cover",
+    display: "block",
+    marginBottom: "15px",
+  }}
+/> </h2>
 
               <p>
                 Manage orders, services, deposits and
